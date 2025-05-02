@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Script to generate an ssh key
 # Author: Manoah Bernier
@@ -12,98 +12,131 @@ COPY_TO_CLIPBOARD=true
 SSH_HOST=""
 SSH_ALIAS=""
 
-usage() {
-    echo "Usage: $(basename "$0") -e email [-n key_name] [-t key_type] [-m comment] [-p true|false] [-c true|false] [-h host] [-a alias]"
-    echo "  -e  Email associated with the key (required)"
-    echo "  -n  Key name (default: id_key)"
-    echo "  -t  Key type: ed25519 or rsa (default: ed25519)"
-    echo "  -m  Comment to add to key (optional)"
-    echo "  -p  Add to ssh-agent (true/false, default: false)"
-    echo "  -c  Copy public key to clipboard (true/false, default: true)"
-    echo "  -h  Host for ~/.ssh/config (e.g., github.com)"
-    echo "  -a  Host alias (optional, default: same as host)"
-    exit 1
+show_help() {
+  prog=$(basename "$0")
+  printf "%s – Generate an SSH key and optionally configure SSH\n\n" "$prog"
+  printf "Usage:\n"
+  printf "  %s -e email [options]\n\n" "$prog"
+  printf "Options:\n"
+  printf "  -e  Email associated with the key (required)\n"
+  printf "  -n  Key name (default: id_key)\n"
+  printf "  -t  Key type: ed25519 or rsa (default: ed25519)\n"
+  printf "  -m  Comment to add to key (optional)\n"
+  printf "  -p  Add to ssh-agent (true/false, default: false)\n"
+  printf "  -c  Copy public key to clipboard (true/false, default: true)\n"
+  printf "  -h  Host for ~/.ssh/config (e.g., github.com)\n"
+  printf "  -a  Host alias (default: same as host)\n\n"
+  printf "Example:\n"
+  printf "  %s -e user@example.com -n id_github -h github.com -a github\n\n" "$prog"
+  printf "Notes:\n"
+  printf "  This script will create ~/.ssh/config if needed.\n"
+  printf "  Backup your SSH config manually if modifying an existing one.\n"
+  exit 0
 }
 
+# If called with "help" or "-h" or "--help" → show help
+if [ $# -eq 1 ]; then
+  case "$1" in
+    help|-h|--help)
+      show_help
+      ;;
+  esac
+fi
+
 while getopts ":e:n:t:m:p:c:h:a:" opt; do
-  case ${opt} in
-    e ) EMAIL="$OPTARG" ;;
-    n ) KEY_NAME="$OPTARG" ;;
-    t ) KEY_TYPE="$OPTARG" ;;
-    m ) COMMENT="$OPTARG" ;;
-    p ) ADD_TO_AGENT="$OPTARG" ;;
-    c ) COPY_TO_CLIPBOARD="$OPTARG" ;;
-    h ) SSH_HOST="$OPTARG" ;;
-    a ) SSH_ALIAS="$OPTARG" ;;
-    \? ) usage ;;
+  case "$opt" in
+    e) EMAIL="$OPTARG" ;;
+    n) KEY_NAME="$OPTARG" ;;
+    t) KEY_TYPE="$OPTARG" ;;
+    m) COMMENT="$OPTARG" ;;
+    p) ADD_TO_AGENT="$OPTARG" ;;
+    c) COPY_TO_CLIPBOARD="$OPTARG" ;;
+    h) SSH_HOST="$OPTARG" ;;
+    a) SSH_ALIAS="$OPTARG" ;;
+    *) show_help ;;
   esac
 done
 
 if [ -z "$EMAIL" ]; then
-    usage
+  show_help
 fi
 
 SSH_DIR="$HOME/.ssh"
 KEY_PATH="$SSH_DIR/$KEY_NAME"
 FULL_COMMENT="$EMAIL"
-[ -n "$COMMENT" ] && FULL_COMMENT="$EMAIL ($COMMENT)"
+if [ -n "$COMMENT" ]; then
+  FULL_COMMENT="$EMAIL ($COMMENT)"
+fi
 
 mkdir -p "$SSH_DIR"
 chmod 700 "$SSH_DIR"
 
 # Generate key
-echo "🔐 Generating $KEY_TYPE key at $KEY_PATH..."
+printf "🔐 Generating %s key at %s...\n" "$KEY_TYPE" "$KEY_PATH"
 if [ "$KEY_TYPE" = "rsa" ]; then
-    ssh-keygen -t rsa -b 4096 -C "$FULL_COMMENT" -f "$KEY_PATH"
+  ssh-keygen -t rsa -b 4096 -C "$FULL_COMMENT" -f "$KEY_PATH"
 else
-    ssh-keygen -t "$KEY_TYPE" -C "$FULL_COMMENT" -f "$KEY_PATH"
+  ssh-keygen -t "$KEY_TYPE" -C "$FULL_COMMENT" -f "$KEY_PATH"
 fi
 
 # Add to SSH agent
-if [ "$ADD_TO_AGENT" = true ]; then
-    if ssh-add "$KEY_PATH"; then
-        echo "🔁 Key added to existing SSH agent."
-    else
-        echo "⚠️  Could not add key to agent. You may need to run: eval \$(ssh-agent) && ssh-add $KEY_PATH"
-    fi
+if [ "$ADD_TO_AGENT" = "true" ]; then
+  if ssh-add "$KEY_PATH"; then
+    printf "🔁 Key added to existing SSH agent.\n"
+  else
+    printf "⚠️  Could not add key to agent.\n"
+    printf "You may need to run: eval \$(ssh-agent) && ssh-add %s\n" "$KEY_PATH"
+  fi
 fi
 
 # Copy to clipboard
-if [ "$COPY_TO_CLIPBOARD" = true ]; then
-    echo "📋 Copying public key to clipboard..."
-    if command -v pbcopy &> /dev/null; then
-        pbcopy < "$KEY_PATH.pub"
-    elif command -v xclip &> /dev/null; then
-        xclip -sel clip < "$KEY_PATH.pub"
-    elif command -v clip &> /dev/null; then
-        clip < "$KEY_PATH.pub"
-    else
-        echo "⚠️ Clipboard tool not found."
-    fi
+if [ "$COPY_TO_CLIPBOARD" = "true" ]; then
+  printf "📋 Copying public key to clipboard...\n"
+  if command -v pbcopy >/dev/null 2>&1; then
+    pbcopy < "$KEY_PATH.pub"
+  elif command -v xclip >/dev/null 2>&1; then
+    xclip -sel clip < "$KEY_PATH.pub"
+  elif command -v clip >/dev/null 2>&1; then
+    clip < "$KEY_PATH.pub"
+  else
+    printf "⚠️ Clipboard tool not found.\n"
+  fi
 fi
 
 # Add SSH config block
 if [ -n "$SSH_HOST" ]; then
-    SSH_ALIAS="${SSH_ALIAS:-$SSH_HOST}"
-    echo "🧩 Adding SSH config block for host: $SSH_ALIAS"
+  if [ -z "$SSH_ALIAS" ]; then
+    SSH_ALIAS="$SSH_HOST"
+  fi
+  printf "🧩 Adding SSH config block for host: %s\n" "$SSH_ALIAS"
 
-    CONFIG_BLOCK="\nHost $SSH_ALIAS
-  HostName $SSH_HOST
-  User git
-  IdentityFile $KEY_PATH
-  IdentitiesOnly yes\n"
+  CONFIG_TMP=$(mktemp)
+  {
+    printf "\n"
+    printf "Host %s\n" "$SSH_ALIAS"
+    printf "  HostName %s\n" "$SSH_HOST"
+    printf "  User git\n"
+    printf "  IdentityFile %s\n" "$KEY_PATH"
+    printf "  IdentitiesOnly yes\n"
+  } > "$CONFIG_TMP"
 
-    # Prevent duplicates
-    if ! grep -q "Host $SSH_ALIAS" "$SSH_DIR/config" 2>/dev/null; then
-        echo -e "$CONFIG_BLOCK" >> "$SSH_DIR/config"
-        chmod 600 "$SSH_DIR/config"
-        echo "✅ SSH config updated with alias '$SSH_ALIAS'"
-    else
-        echo "⚠️ SSH config already contains a block for '$SSH_ALIAS'. Skipped."
-    fi
+  CONFIG_FILE="$SSH_DIR/config"
+  if [ ! -f "$CONFIG_FILE" ]; then
+    touch "$CONFIG_FILE"
+    chmod 600 "$CONFIG_FILE"
+  fi
+
+  if ! grep -q "Host $SSH_ALIAS" "$CONFIG_FILE" 2>/dev/null; then
+    cat "$CONFIG_TMP" >> "$CONFIG_FILE"
+    printf "✅ SSH config updated with alias '%s'\n" "$SSH_ALIAS"
+  else
+    printf "⚠️ SSH config already contains a block for '%s'. Skipped.\n" "$SSH_ALIAS"
+  fi
+  rm "$CONFIG_TMP"
 fi
 
-echo -e "\n✅ Key generation complete."
-echo "🔑 Private key: $KEY_PATH"
-echo "📝 Comment: $FULL_COMMENT"
-echo "📎 Public key: $(cat "$KEY_PATH.pub")"
+printf "\n✅ Key generation complete.\n"
+printf "🔑 Private key: %s\n" "$KEY_PATH"
+printf "📝 Comment: %s\n" "$FULL_COMMENT"
+printf "📎 Public key:\n"
+cat "$KEY_PATH.pub"
