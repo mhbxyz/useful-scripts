@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/sh
 
 # Script to view and edit the ssh config
 # Author: Manoah Bernier
@@ -7,116 +7,193 @@ SSH_CONFIG="$HOME/.ssh/config"
 BACKUP_FILE="$HOME/.ssh/config.bak"
 EDITOR="${EDITOR:-nano}"
 
-add_host() {
-  local host="$1"
-  local hostname="$2"
-  local user="$3"
-  local identity_file="$4"
+# Ensure config file exists
+if [ ! -f "$SSH_CONFIG" ]; then
+  mkdir -p "$(dirname "$SSH_CONFIG")"
+  touch "$SSH_CONFIG"
+fi
 
-  if grep -qE "^Host\s+$host\$" "$SSH_CONFIG"; then
-    echo "Host '$host' already exists in config."
+show_help() {
+  prog=$(basename "$0")
+  cat <<EOF
+$prog – View and edit your SSH config
+
+Usage:
+  $prog add <host> <hostname> <user> [identity_file]   Add a new SSH host entry
+  $prog remove <host>                                  Remove an existing host entry
+  $prog list                                           List all defined host aliases
+  $prog show <host>                                    Show configuration details for a host
+  $prog edit <host>                                    Edit a host entry using \$EDITOR (default: $EDITOR)
+  $prog backup                                         Create a backup of your SSH config
+  $prog help                                           Show this help message
+
+Description:
+  This script lets you manage your ~/.ssh/config file by adding, removing,
+  listing, showing, editing, or backing up SSH host entries.
+
+Examples:
+  $prog add myserver example.com user ~/.ssh/id_rsa
+  $prog remove myserver
+  $prog list
+  $prog show myserver
+  $prog edit myserver
+  $prog backup
+
+Notes:
+  - The SSH config will be automatically created if missing.
+  - A backup is saved as ~/.ssh/config.bak during remove/edit.
+EOF
+  exit 0
+}
+
+add_host() {
+  host="$1"
+  hostname="$2"
+  user="$3"
+  identity_file="$4"
+
+  if grep -q "^Host[[:space:]]\+$host\$" "$SSH_CONFIG"; then
+    printf "Host '%s' already exists in config.\n" "$host"
     return 1
   fi
 
   {
-    echo ""
-    echo "Host $host"
-    echo "    HostName $hostname"
-    echo "    User $user"
-    [ -n "$identity_file" ] && echo "    IdentityFile $identity_file"
+    printf "\n"
+    printf "Host %s\n" "$host"
+    printf "    HostName %s\n" "$hostname"
+    printf "    User %s\n" "$user"
+    if [ -n "$identity_file" ]; then
+      printf "    IdentityFile %s\n" "$identity_file"
+    fi
   } >> "$SSH_CONFIG"
 
-  echo "Added host '$host'."
+  printf "Added host '%s'.\n" "$host"
 }
 
 remove_host() {
-  local host="$1"
-  if ! grep -qE "^Host\s+$host\$" "$SSH_CONFIG"; then
-    echo "Host '$host' not found."
+  host="$1"
+  if ! grep -q "^Host[[:space:]]\+$host\$" "$SSH_CONFIG"; then
+    printf "Host '%s' not found.\n" "$host"
     return 1
   fi
 
-  # Remove lines from "Host <host>" to the next "Host" or EOF
-  sed -i.bak "/^Host $host\$/,/^Host /{ /^Host $host\$/d; /^Host /!d }" "$SSH_CONFIG"
-  echo "Removed host '$host'. Backup saved to $SSH_CONFIG.bak"
+  tmpfile=$(mktemp)
+  awk -v h="$host" '
+    BEGIN { skip=0 }
+    /^Host / {
+      if ($2 == h) { skip=1; next }
+      if (skip) { skip=0 }
+    }
+    skip==0 { print }
+  ' "$SSH_CONFIG" > "$tmpfile"
+
+  cp "$SSH_CONFIG" "$SSH_CONFIG.bak"
+  mv "$tmpfile" "$SSH_CONFIG"
+
+  printf "Removed host '%s'. Backup saved to %s.bak\n" "$host" "$SSH_CONFIG"
 }
 
 list_hosts() {
-  grep "^Host " "$SSH_CONFIG" | awk '{print $2}'
+  awk '/^Host / {print $2}' "$SSH_CONFIG"
 }
 
 show_host() {
-  local host="$1"
-  awk "/^Host $host\$/{p=1; next} /^Host /{p=0} p" "$SSH_CONFIG" | sed "1iHost $host"
+  host="$1"
+  awk -v h="$host" '
+    BEGIN { p=0 }
+    /^Host / {
+      if ($2 == h) { print; p=1; next }
+      if (p==1) { exit }
+    }
+    p==1 { print }
+  ' "$SSH_CONFIG"
 }
 
 edit_host() {
-  local host="$1"
-  if ! grep -qE "^Host\s+$host\$" "$SSH_CONFIG"; then
-    echo "Host '$host' not found."
+  host="$1"
+  if ! grep -q "^Host[[:space:]]\+$host\$" "$SSH_CONFIG"; then
+    printf "Host '%s' not found.\n" "$host"
     return 1
   fi
 
-  local temp_file
   temp_file=$(mktemp)
 
-  # Extract existing host block
-  awk "/^Host $host\$/{p=1; print; next} /^Host /{p=0} p" "$SSH_CONFIG" > "$temp_file"
+  # extract block
+  awk -v h="$host" '
+    BEGIN { p=0 }
+    /^Host / {
+      if ($2 == h) { print; p=1; next }
+      if (p==1) { exit }
+    }
+    p==1 { print }
+  ' "$SSH_CONFIG" > "$temp_file"
 
-  # Open in editor
   $EDITOR "$temp_file"
 
-  # Replace old block with new block
-  sed -i.bak "/^Host $host\$/,/^Host /{ /^Host $host\$/d; /^Host /!d }" "$SSH_CONFIG"
-  echo "" >> "$SSH_CONFIG"
+  # remove old block
+  tmpfile=$(mktemp)
+  awk -v h="$host" '
+    BEGIN { skip=0 }
+    /^Host / {
+      if ($2 == h) { skip=1; next }
+      if (skip) { skip=0 }
+    }
+    skip==0 { print }
+  ' "$SSH_CONFIG" > "$tmpfile"
+
+  cp "$SSH_CONFIG" "$SSH_CONFIG.bak"
+  mv "$tmpfile" "$SSH_CONFIG"
+
+  # append edited block
+  printf "\n" >> "$SSH_CONFIG"
   cat "$temp_file" >> "$SSH_CONFIG"
 
-  echo "Host '$host' updated."
-  echo "Backup saved to $SSH_CONFIG.bak"
   rm "$temp_file"
+
+  printf "Host '%s' updated.\n" "$host"
+  printf "Backup saved to %s.bak\n" "$SSH_CONFIG"
 }
 
 backup_config() {
   cp "$SSH_CONFIG" "$BACKUP_FILE"
-  echo "Backup saved to $BACKUP_FILE"
+  printf "Backup saved to %s\n" "$BACKUP_FILE"
 }
 
-usage() {
-  prog=$(basename "$0")
-  echo "Usage:"
-  echo "  $prog add <host> <hostname> <user> [identity_file]   Add a new SSH host entry"
-  echo "  $prog remove <host>                                  Remove an existing host entry"
-  echo "  $prog list                                           List all defined host aliases"
-  echo "  $prog show <host>                                    Show configuration details for a host"
-  echo "  $prog edit <host>                                    Edit a host entry using \$EDITOR (default: $(echo "$EDITOR"))"
-  echo "  $prog backup                                         Create a backup of your SSH config"
-}
+if [ $# -lt 1 ]; then
+  show_help
+fi
 
+cmd="$1"
+shift
 
-case "$1" in
+case "$cmd" in
   add)
-    [ $# -ge 4 ] || { usage; exit 1; }
-    add_host "$2" "$3" "$4" "$5"
+    [ $# -ge 3 ] || { show_help; exit 1; }
+    add_host "$1" "$2" "$3" "${4:-}"
     ;;
   remove)
-    [ $# -eq 2 ] || { usage; exit 1; }
-    remove_host "$2"
+    [ $# -eq 1 ] || { show_help; exit 1; }
+    remove_host "$1"
     ;;
   list)
     list_hosts
     ;;
   show)
-    [ $# -eq 2 ] || { usage; exit 1; }
-    show_host "$2"
+    [ $# -eq 1 ] || { show_help; exit 1; }
+    show_host "$1"
     ;;
   edit)
-    [ $# -eq 2 ] || { usage; exit 1; }
-    edit_host "$2"
+    [ $# -eq 1 ] || { show_help; exit 1; }
+    edit_host "$1"
     ;;
   backup)
     backup_config
     ;;
+  help|-h|--help)
+    show_help
+    ;;
   *)
-    usage
+    printf "Unknown command: %s\n\n" "$cmd"
+    show_help
     ;;
 esac
